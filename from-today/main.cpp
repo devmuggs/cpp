@@ -5,11 +5,20 @@
 #include <iostream>
 
 using namespace std;
+using namespace std::chrono;
 
-enum class Arg { Days, Weeks, Months, Years };
+enum class Arg : size_t
+{
+    Days = 0,
+    Weeks,
+    Months,
+    Years,
+    Count
+};
 
 // Allows us to shorthand the function pointer type
-using ApplyFunc = void(*)(chrono::time_point<chrono::system_clock>&, int); // & -> pass by reference, edit the original time_point
+using ApplyFunc = void (*)(std::chrono::sys_days &, int); // & -> pass by reference, edit the original time_point
+using sys_days = chrono::time_point<chrono::system_clock, chrono::days>;
 
 /*
     Using a constexpr array to map Arg enum to corresponding functions
@@ -30,83 +39,121 @@ using ApplyFunc = void(*)(chrono::time_point<chrono::system_clock>&, int); // & 
 */
 constexpr ApplyFunc ArgFuncs[] = {
     // Days
-    [](auto& tp, int value) { tp += chrono::hours(24 * value); }, 
+    [](std::chrono::sys_days &d, int v)
+    {
+        d += std::chrono::days{v};
+    },
+
     // Weeks
-    [](auto& tp, int value) { tp += chrono::hours(24 * 7 * value); },
-    // Months
-    [](auto& tp, int value) { 
-        auto dt = chrono::system_clock::to_time_t(tp);
-        tm* timeinfo = localtime(&dt);
-        timeinfo->tm_mon += value;
-        dt = mktime(timeinfo);
-        tp = chrono::system_clock::from_time_t(dt);
+    [](std::chrono::sys_days &d, int v)
+    {
+        d += std::chrono::days{7 * v};
     },
+
+    [](std::chrono::sys_days &d, int v)
+    {
+        using namespace std::chrono;
+        year_month_day ymd{d};
+        ymd += months{v};
+        d = sys_days{ymd};
+    },
+
     // Years
-    [](auto& tp, int value) { 
-        auto dt = chrono::system_clock::to_time_t(tp);
-        tm* timeinfo = localtime(&dt);
-        timeinfo->tm_year += value;
-        dt = mktime(timeinfo);
-        tp = chrono::system_clock::from_time_t(dt);
+    [](std::chrono::sys_days &d, int v)
+    {
+        using namespace std::chrono;
+        year_month_day ymd{d};
+        ymd += years{v};
+        d = sys_days{ymd};
     },
 };
 
-// Map argument names to Arg enum values
-const unordered_map<string, Arg> ArgNameMap = {
-    {"--days", Arg::Days},
-    {"--weeks", Arg::Weeks},
-    {"--months", Arg::Months},
-    {"--years", Arg::Years},
-};
-
-constexpr int argToIndex(Arg arg) {
+constexpr int argToIndex(Arg arg)
+{
     return static_cast<int>(arg); // Assuming Arg enum values are sequential starting from 0, will return 0 for Days, 1 for Weeks, etc.
 };
 
-unordered_map<Arg, int> parseArgs(int argc, char* argv[]) {
-    unordered_map<Arg, int> inputs;
+struct Args
+{
+    int days = 0;
+    int weeks = 0;
+    int months = 0;
+    int years = 0;
+};
+
+Args parseArgs(int argc, char *argv[])
+{
+    Args inputs;
 
     // start at 1 to skip the program name
-    for (int i = 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++)
+    {
 
-        // check to see if the argument is in the ArgNameMap
-        string argName = argv[i];
-        auto it = ArgNameMap.find(argName);
-        
-        if (it == ArgNameMap.end()) {
-            throw invalid_argument("Unknown argument: " + argName);
+        std::string_view argStr = argv[i];
+
+        if (i + 1 >= argc)
+        {
+            throw runtime_error("Missing value for argument: " + string(argStr));
         }
 
-        Arg arg = it->second; 
-        int value = stoi(argv[++i]); // convert string to int
-        
-        inputs[arg] = value;
+        if (argStr == "--days")
+        {
+            inputs.days = stoi(argv[++i]);
+        }
+        else if (argStr == "--weeks")
+        {
+            inputs.weeks = stoi(argv[++i]);
+        }
+        else if (argStr == "--months")
+        {
+            inputs.months = stoi(argv[++i]);
+        }
+        else if (argStr == "--years")
+        {
+            inputs.years = stoi(argv[++i]);
+        }
+        else
+        {
+            throw runtime_error("Unknown argument: " + string(argStr));
+        }
     }
 
     return inputs;
 }
 
-int main(int argc, char* argv[]) {
-    chrono::time_point<chrono::system_clock> today = chrono::system_clock::now();
+int main(int argc, char *argv[])
+{
+    sys_days today = floor<chrono::days>(chrono::system_clock::now());
 
     try
     {
-        auto input = parseArgs(argc, argv);
-
-        for (const auto& [arg, value] : input) {
-            int index = argToIndex(arg);
-            ArgFuncs[index](today, value); // Call the corresponding function
+        if (argc == 2 && string(argv[1]) == "--help")
+        {
+            cout << "Usage: from-today [--days N] [--weeks N] [--months N] [--years N]\n";
+            cout << "Example: from-today --days 5 --weeks 2\n";
+            return 0;
         }
 
-        time_t result_time = chrono::system_clock::to_time_t(today);
-        cout << "Resulting date: " << ctime(&result_time);
+        auto input = parseArgs(argc, argv);
+
+        ArgFuncs[argToIndex(Arg::Days)](today, input.days);
+        ArgFuncs[argToIndex(Arg::Weeks)](today, input.weeks);
+        ArgFuncs[argToIndex(Arg::Months)](today, input.months);
+        ArgFuncs[argToIndex(Arg::Years)](today, input.years);
+
+        year_month_day out{today};
+
+        cout << int(out.year()) << "-"
+             << unsigned(out.month()) << "-"
+             << unsigned(out.day()) << "\n";
+
+        return 0;
     }
-    catch(const std::exception& e)
+    catch (const std::exception &e)
     {
         std::cerr << e.what() << '\n';
         return 1;
     }
-    
 
     return 0;
 }
